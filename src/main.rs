@@ -117,7 +117,8 @@ fn play_a_game(dict: &Vec<String>) -> bool {
    // filter out the words that don't agree with the info
    // make the best guess
     for c in 0..6 {
-
+        
+        println!("{}, {}", c, guess);
         if &guess == answer {
             return true
         }
@@ -126,8 +127,6 @@ fn play_a_game(dict: &Vec<String>) -> bool {
         words = filter_words(&words, &info);
 
         guess = best_guess(&words);
-        println!("{}, {}", c, guess);
-
     }
 
     return false
