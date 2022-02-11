@@ -1,24 +1,31 @@
 use std::path::Path;
-use rand::seq::SliceRandom;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::collections::HashSet;
+use std::collections::HashMap;
+use std::cmp::Ordering;
 
-// Struct to store what
-// we know about the answer
-// this is obviously a bit redundant
-// (all info is in here twice) but it's
-// easier to work with like this
-#[derive(Debug)]
-struct Info {
-    in_word: String,
-    not_word: String,
-    in_pos: Vec<(usize, char)>,
-    not_pos: Vec<(usize, char)>,
+#[derive(PartialEq,PartialOrd)]
+struct NonNan(f32);
+
+impl NonNan {
+    fn new(val: f32) -> Option<NonNan> {
+        if val.is_nan() {
+            None
+        } else {
+            Some(NonNan(val))
+        }
+    }
 }
 
+impl Eq for NonNan {}
 
-fn get_dict(fname: &str) -> Vec<String> {
+impl Ord for NonNan {
+    fn cmp(&self, other: &NonNan) -> Ordering {
+        self.partial_cmp(other).unwrap()
+    }
+}
+
+fn get_words(fname: &str) -> Vec<String> {
     // read the dictionary into a list
     let fpath = Path::new(fname);
     let f = File::open(&fpath)
@@ -32,109 +39,86 @@ fn get_dict(fname: &str) -> Vec<String> {
     return dict
 }
 
+fn make_a_guess(word: &str, answer: &str) -> String {
 
-fn is_valid(word: &str, info: &Info) -> bool {
-    //apply all the checks to a word
-    if !info.in_word.chars().all(|x| word.contains(x)) {
-        // does word contain all letters it should
-        return false;
-    }
-    if info.not_word.chars().any(|x| word.contains(x)) {
-        // does it contain any letters it shouldn't
-        return false
-    }
-    for (i, l) in &info.in_pos {
-        //are all the letters where they should be
-        if word.chars().nth(*i).unwrap() != *l {
-           return false
+    let mut pattern = "".to_string();
+    for (w, a) in word.chars().zip(answer.chars()) {
+        if w == a {
+            pattern.push('G');
+        } else if answer.contains(w) {
+            pattern.push('Y')
+        } else {
+            pattern.push('.')
         }
     }
-    for (i, l) in &info.not_pos {
-        // are there letters where there shouldn't
-        if word.chars().nth(*i).unwrap() == *l {
-            return false
+    return pattern
+}
+
+fn entropy(word: &str, words: &Vec<String>) -> NonNan {
+
+    let mut tree = HashMap::new();
+    let p = 1.0 / words.len() as f32;
+    for w in words {
+        let pattern = make_a_guess(w, word);
+        if tree.contains_key(&pattern) {
+            *tree.get_mut(&pattern).unwrap() += p;
+        } else {
+            tree.insert(pattern, p);
         }
     }
-    return true
+
+    let mut H = 0.;
+    for (_k, v) in tree {
+        H += v * v.recip().log2();
+    }
+    return NonNan::new(H).unwrap();
 }
 
-
-fn filter_words(words: &Vec<String>, info: &Info) -> Vec<String> {
-    // get all words that match info
-    words.into_iter().filter(|&x| is_valid(&x, info)).cloned().collect()
-}
-
-fn overlap(w1: &str, w2: &str) -> u32 {
-    // how many (unique) letters do 2 words share
-    let set: HashSet<char> = w1.chars().collect();
-    w2.chars().filter(|c| set.contains(&c)).count() as u32
-}
-
-fn total_overlap(w1: &str, words: &Vec<String>) -> u32 {
-    // get the overlap between a word and all others
-    words.into_iter().map(|x| overlap(w1, x)).sum()
+fn filter_words(answer: &str, guess: &str, words: &Vec<String>) -> Vec<String> {
+    let p = make_a_guess(guess, answer);
+    words.into_iter()
+         .filter(|w| (make_a_guess(guess, &w) == p) && (*w != guess))
+         .cloned()
+         .collect()
 }
 
 fn best_guess(words: &Vec<String>) -> String {
-    // the best word is the word with most letters in common with
-    // most words in the list.
-    words.into_iter().max_by_key(|x| total_overlap(x, words)).unwrap().to_string()
+    words.into_iter().max_by_key(|w| entropy(w, words)).unwrap().to_string()
 }
 
-fn make_guess(guess: &str, answer: &str, info: &Info) -> Info {
-    // combine info with new info from our guess
-    let in_word: String = guess.chars().filter(|x| answer.contains(&x.to_string())).collect();
-    let not_word: String = guess.chars().filter(|x| !answer.contains(&x.to_string())).collect();
-    let mut pos = info.in_pos.to_vec();
-    let mut not_pos = info.not_pos.to_vec();
-    for (i, l) in guess.chars().enumerate() {
-        if l == answer.chars().nth(i).unwrap() {
-            pos.push((i, l));
-        } else {
-            not_pos.push((i, l));
+fn game(answer: &str, words: &Vec<String>, first_word: &str, display: bool) -> i32 {
+
+    let mut possible = words.to_vec();
+    let mut guess = first_word.to_string();
+    let mut n = 1;
+
+    if display {
+        println!("The answer is: {}", answer);
+        println!("Guess {}: {}", n, guess);
+    }
+
+    while guess != answer {
+        possible = filter_words(answer, &guess, &possible);
+        guess = best_guess(&possible);
+        n += 1;
+        if display {
+            println!("Guess {}: {}", n, guess);
         }
     }
-    return Info {in_word : in_word + &info.in_word,
-                 not_word: not_word + &info.not_word,
-                 in_pos  : pos,
-                 not_pos : not_pos}
+
+    return n
 }
 
-
-fn play_a_game(dict: &Vec<String>) -> bool {
-
-    let mut words = dict.to_vec();
-
-    let answer = dict.choose(&mut rand::thread_rng()).unwrap();
-    println!("The chosen word is: {}", answer);
-
-    let mut info = Info {in_word: "".to_string(), not_word:"".to_string(), in_pos:vec![], not_pos:vec![]};
-
-    let mut guess = "aeons".to_string();
-    //always start with this word
-
-   // try six times. update our info, based on the guess
-   // filter out the words that don't agree with the info
-   // make the best guess
-    for c in 0..6 {
-        
-        println!("{}, {}", c, guess);
-        if &guess == answer {
-            return true
-        }
-
-        info = make_guess(&guess, &answer, &info);
-        words = filter_words(&words, &info);
-
-        guess = best_guess(&words);
-    }
-
-    return false
-
+fn play_all_words(words: &Vec<String>, answers: &Vec<String>) -> Vec<i32> {
+    return answers.iter().map(|a| game(a, words, &"aeons", false)).collect()
 }
 
 
 fn main() {
-    let dict = get_dict("../data/words5.txt");
-    play_a_game(&dict);
+    let words = get_words("../data/words.txt");
+    let answers = get_words("../data/answers.txt");
+
+    let results = play_all_words(&words, &answers);
+    println!("Words solved in 6: {}", results.iter().filter(|&x| *x <= 6).count());
+    println!("Average guesses: {}", results.iter().sum::<i32>() as f32 / results.len() as f32);
 }
